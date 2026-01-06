@@ -1,0 +1,81 @@
+include:
+ - template: Security/SAST.gitlab-ci.yml
+ - template: Security/Dependency-Scanning.gitlab-ci.yml
+ - template: Security/Secret-Detection.gitlab-ci.yml
+ - template: Security/Container-Scanning.gitlab-ci.yml
+
+stages:
+ - test
+ - build
+ - testing
+ - dockerize
+ - container-security
+ - gitops-update
+
+variables:
+ MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+ IMAGE_NAME: registry.gitlab.com/$CI_PROJECT_PATH
+ CS_IMAGE: "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
+ SECURE_LOG_LEVEL: debug
+
+build:
+ stage: build
+ image: maven:3.9.5-eclipse-temurin-17
+ needs:
+   - job: sast
+     optional: true
+   - job: dependency_scanning
+     optional: true
+   - job: secret_detection
+     optional: true
+ script:
+   - mvn package -DskipTests
+ artifacts:
+   paths:
+     - target/java-cicd-demo-1.0-SNAPSHOT.jar
+
+test:
+ stage: testing
+ image: maven:3.9.5-eclipse-temurin-17
+ needs:
+   - job: build
+ script:
+   - mvn test
+
+build_docker:
+ stage: dockerize
+ image: docker:latest  # Latest stable
+ services:
+  - docker:dind    # Matching service
+ needs:
+   - job: build
+   - job: test
+ script:
+   - docker buildx build --platform=linux/arm64 -t $CS_IMAGE . #$IMAGE_NAME:$CI_COMMIT_SHORT_SHA .
+   - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" registry.gitlab.com
+   - docker push $CS_IMAGE #$IMAGE_NAME:$CI_COMMIT_SHORT_SHA
+
+container_scanning:
+ stage: container-security
+ needs:
+   - job: build_docker
+ variables:
+   CI_APPLICATION_REPOSITORY: $IMAGE_NAME
+   CI_APPLICATION_TAG: $CI_COMMIT_SHORT_SHA
+
+update_deployment_config:
+ stage: gitops-update
+ image: alpine:3.20
+ needs:
+   - job: container_scanning
+ script:
+   - export IMAGE="registry.gitlab.com/akhildevopsjune/sourcerepo-java:61e5fedd"
+   - apk add --no-cache git openssh sed
+   - git clone https://oauth2:${GITOPS_ACCESS_TOKEN}@gitlab.com/akhildevopsjune/gitops-repo.git
+   - cd gitops-repo
+   - git config user.email "akhildevopsjune@gmail.com"
+   - git config user.name "akhildevopsjune@gmail.com"
+   - "sed -i 's|image:.*|image: '${CS_IMAGE}'|g' apps/application-deployment/deployment.yml"
+   - git add .
+   - git commit -m "Update image to ${CI_COMMIT_SHORT_SHA}"
+   - git push origin main
