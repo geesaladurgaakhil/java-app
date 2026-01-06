@@ -20,7 +20,7 @@ variables:
 
 build:
  stage: build
- image: maven:3.9.5-eclipse-temurin-17
+ image: maven:3.9.12-eclipse-temurin-17
  needs:
    - job: sast
      optional: true
@@ -36,7 +36,7 @@ build:
 
 test:
  stage: testing
- image: maven:3.9.5-eclipse-temurin-17
+ image: maven:3.9.12-eclipse-temurin-17
  needs:
    - job: build
  script:
